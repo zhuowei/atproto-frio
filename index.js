@@ -10,7 +10,7 @@ const singleUserMode = true;
 const serverDomain = process.env.PROJECT_DOMAIN ||
     'please-set-project-domain-read-docs.localhost';
 const hardcodedInviteCode = process.env.HARDCODED_INVITE_CODE;
-const plcServer = process.env.PLC_SERVER || 'http://localhost:2582/';
+const plcServer = process.env.PLC_SERVER || 'http://localhost:2582';
 const xrpcServer = 'http://localhost:2583/xrpc/';
 
 function noAwait(promise) {}
@@ -43,16 +43,21 @@ async function xrpcProxy(req, res, next) {
       headers[i] = req.headers[i];
     }
   }
+  console.log(
+      'xrpcProxy', headers, req.body, req.method,
+      xrpcServer + req.url.substring(1));
   const xrpcResponse = await fetch(
       xrpcServer + req.url.substring(1),
       {method: req.method, headers: headers, body: req.body});
   const body = await xrpcResponse.arrayBuffer();
+  console.log('xrpcProxy body', body);
   res.status(xrpcResponse.status)
       .set('content-type', xrpcResponse.headers.get('content-type'))
       .send(Buffer.from(body));
 }
 
-app.use('/xrpc/', bodyParser.raw());
+app.use(
+    '/xrpc/', bodyParser.raw({type: ['application/json', 'application/cbor']}));
 app.use('/xrpc/', xrpcProxy);
 
 function didWebUrl(userDid) {
@@ -69,8 +74,9 @@ async function lookupPdcFromDid(userDid) {
   }
   const didUrl = userDid.startsWith('did:web:') ?
       didWebUrl(userDid) :
-      plcServer + encodeURIComponent(userDid);
-  const plcResp = await fetch(plcServer + encodeURIComponent(userDid));
+      plcServer + '/' + encodeURIComponent(userDid);
+  console.log(didUrl);
+  const plcResp = await fetch(didUrl);
   const plcJson = await plcResp.json();
   return plcJson.service[0].serviceEndpoint + '/xrpc/';
 }
@@ -80,20 +86,22 @@ async function getUserFollowers(usernameOrDid, authorization) {
       `app.bsky.getUserFollowers?user=${encodeURIComponent(usernameOrDid)}`,
       authorization);
   const xrpcJson = await xrpcResp.json();
+  console.log('getUserFollowers', usernameOrDid, xrpcJson);
   return xrpcJson;
 }
 
 async function pushUserToRemotePdc(userDid, remotePdc, authorization) {
   const remoteRootResp = await fetch(
       `${remotePdc}com.atproto.syncGetRoot?did=${encodeURIComponent(userDid)}`);
-  const remoteRootJson = await remoteRootResp.json();
-  console.log(remoteRootJson);
+  const remoteRootJson =
+      remoteRootResp.status === 200 ? await remoteRootResp.json() : {};
+  console.log('remoteRootJson', remoteRootJson);
   const diffToRootResp = await xrpcGet(
       `com.atproto.syncGetRepo?did=${encodeURIComponent(userDid)}&from=${
           encodeURIComponent(remoteRootJson.root || '')}`,
       authorization)
   const diffToRootData = await diffToRootResp.arrayBuffer();
-  // console.log(diffToRootData);
+  console.log('diffToRootData', diffToRootData);
   const remotePushResp = await fetch(
       `${remotePdc}com.atproto.syncUpdateRepo?did=${
           encodeURIComponent(userDid)}`,
@@ -298,6 +306,7 @@ async function usernameToDidRemote(username) {
   const xrpcRes = await fetch(`${remoteXrpc}com.atproto.resolveName?name=${
       encodeURIComponent(username)}`);
   const xrpcJson = await xrpcRes.json();
+  console.log(xrpcJson);
   return xrpcJson.did;
 }
 
