@@ -10,10 +10,13 @@ const singleUserMode = true;
 const serverDomain = process.env.PROJECT_DOMAIN ||
     'please-set-project-domain-read-docs.localhost';
 const hardcodedInviteCode = process.env.HARDCODED_INVITE_CODE;
+const plcServer = process.env.PLC_SERVER || 'http://localhost:2582/';
 const xrpcServer = 'http://localhost:2583/xrpc/';
 
+function noAwait(promise) {}
+
 function xrpcPost(endpoint, request, accessToken = '') {
-  if (accessToken === "Bearer TODO-anonymous-access-token") {
+  if (accessToken === 'Bearer TODO-anonymous-access-token') {
     accessToken = '';
   }
   return fetch(xrpcServer + endpoint, {
@@ -24,7 +27,7 @@ function xrpcPost(endpoint, request, accessToken = '') {
 }
 
 function xrpcGet(endpoint, accessToken = '') {
-  if (accessToken === "Bearer TODO-anonymous-access-token") {
+  if (accessToken === 'Bearer TODO-anonymous-access-token') {
     accessToken = '';
   }
   return fetch(xrpcServer + endpoint, {
@@ -52,10 +55,100 @@ async function xrpcProxy(req, res, next) {
 app.use('/xrpc/', bodyParser.raw());
 app.use('/xrpc/', xrpcProxy);
 
+async function lookupPdcFromDid(userDid) {
+  console.log('lookupPdcFromDid', userDid);
+  if (userDid === 'did:test:hello') {
+    return 'http://localhost:3333/xrpc/';
+  }
+  const plcResp = await fetch(plcServer + encodeURIComponent(userDid));
+  const plcJson = await plcResp.json();
+  return plcJson.service[0].serviceEndpoint + '/xrpc/';
+}
+
+async function getUserFollowers(usernameOrDid, authorization) {
+  const xrpcResp = await xrpcGet(
+      `app.bsky.getUserFollowers?user=${encodeURIComponent(usernameOrDid)}`,
+      authorization);
+  const xrpcJson = await xrpcResp.json();
+  return xrpcJson;
+}
+
+async function pushUserToRemotePdc(userDid, remotePdc, authorization) {
+  const remoteRootResp = await fetch(
+      `${remotePdc}com.atproto.syncGetRoot?did=${encodeURIComponent(userDid)}`);
+  const remoteRootJson = await remoteRootResp.json();
+  console.log(remoteRootJson);
+  const diffToRootResp = await xrpcGet(
+      `com.atproto.syncGetRepo?did=${encodeURIComponent(userDid)}&from=${
+          encodeURIComponent(remoteRootJson.root || '')}`,
+      authorization)
+  const diffToRootData = await diffToRootResp.arrayBuffer();
+  // console.log(diffToRootData);
+  const remotePushResp = await fetch(
+      `${remotePdc}com.atproto.syncUpdateRepo?did=${
+          encodeURIComponent(userDid)}`,
+      {
+        method: 'POST',
+        headers: {'content-type': 'application/cbor'},
+        body: diffToRootData
+      });
+  console.log('pushing to', remotePdc, 'returns', remotePushResp.status);
+  return remotePushResp.status;
+}
+
+async function doPushUserToFollowers(authorization, extraCcUsers = []) {
+  // port of
+  // https://github.com/bluesky-social/atproto/pull/167/files#diff-91afa8406d315505fda81a977a0b63b1b991de2a211293343aea1eae2f225165L268
+  // for each follower of user + extra CC users, push the current user's repo to
+  // their server. In the dumbest way possible.
+  const currentUserDid = getDidFromAuthorizationInsecure(authorization);
+  const followers = (await getUserFollowers(currentUserDid, authorization))
+                        .followers.map(a => a.did);
+  ;
+  const extraCcDids = (await Promise.all(extraCcUsers.map(async a => {
+                        try {
+                          return await usernameToDidRemote(a);
+                        } catch (e) {
+                          console.log(e);
+                          return null;
+                        }
+                      }))).filter(a => a !== null);
+  const pdcLookupsRaw =
+      (await Promise.all([...followers, ...extraCcDids].map(async a => {
+        try {
+          return await lookupPdcFromDid(a);
+        } catch (e) {
+          console.log(e);
+          return null;
+        }
+      })))
+          .filter(
+              a => a !== null && a !== serverDomain &&
+                  !a.startsWith('localhost:'));
+  const pdcLookups = pdcLookupsRaw.filter((v, i, a) => a.indexOf(v) === i);
+  console.log('about to push to', pdcLookups);
+  const pushResults =
+      (await Promise.all(pdcLookups.map(async a => {
+        try {
+          return await pushUserToRemotePdc(currentUserDid, a, authorization);
+        } catch (e) {
+          console.log(e);
+          return null;
+        }
+      }))).filter(a => a !== null);
+  console.log(pushResults);
+}
+
 const staticPath = 'static';
 app.use(express.static('static'));
 app.use(express.json());
 app.use(upload.none());
+
+app.get('/force-sync', async (req, res) => {
+  await doPushUserToFollowers(
+      req.headers.authorization, req.query.cc ? req.query.cc.split(',') : []);
+  res.status(200).send({});
+});
 
 function translateAtprotoAuthorToMastodon(atprotoAuthor) {
   return {
@@ -187,11 +280,13 @@ app.get('/api/v1/accounts/verify_credentials', async (req, res) => {
 });
 
 async function usernameToDidRemote(username) {
-  if (username.startsWith("did:")) {
+  if (username.startsWith('did:')) {
     return username;
   }
-  const remoteXrpc = username.endsWith(".test")? xrpcServer: `https://${username}/xrpc/`;
-  const xrpcRes = await fetch(`${remoteXrpc}com.atproto.resolveName?name=${encodeURIComponent(username)}`);
+  const remoteXrpc =
+      username.endsWith('.test') ? xrpcServer : `https://${username}/xrpc/`;
+  const xrpcRes = await fetch(`${remoteXrpc}com.atproto.resolveName?name=${
+      encodeURIComponent(username)}`);
   const xrpcJson = await xrpcRes.json();
   return xrpcJson.did;
 }
@@ -200,7 +295,11 @@ app.post('/api/v1/accounts/:accountId/follow', async (req, res) => {
   // Resolve the DID
   const targetUsername = req.params.accountId;
   const targetDid = await usernameToDidRemote(targetUsername);
-  const xrpcReq = {$type: 'app.bsky.follow', subject: targetDid, createdAt: new Date().toISOString()};
+  const xrpcReq = {
+    $type: 'app.bsky.follow',
+    subject: targetDid,
+    createdAt: new Date().toISOString()
+  };
   const xrpcRes = await xrpcPost(
       `com.atproto.repoCreateRecord?collection=app.bsky.follow&did=${
           encodeURIComponent(
@@ -208,6 +307,7 @@ app.post('/api/v1/accounts/:accountId/follow', async (req, res) => {
       xrpcReq, req.headers.authorization);
   const xrpcJson = await xrpcRes.json();
   console.log(xrpcJson);
+  noAwait(doPushUserToFollowers(req.headers.authorization, [targetDid]));
   res.status(xrpcRes.status).json({id: targetDid});
 });
 
@@ -310,17 +410,19 @@ app.get('/api/v1/notifications', (req, res) => {
 
 app.get('/api/v2/search', (req, res) => {
   // TODO(zhuowei): actually point this upstream to search
-  res.status(200).json({accounts: [{
-    acct: req.query.q,
-    display_name: req.query.q,
-    username: req.query.q,
-    id: req.query.q,
-    avatar: `https://${serverDomain}/images/avi.png`,
-    url: `https://${req.query.q}/${req.query.q}`,
-    fields: [],
-  }],
-hashtags: [],
-statuses: [],});
+  res.status(200).json({
+    accounts: [{
+      acct: req.query.q,
+      display_name: req.query.q,
+      username: req.query.q,
+      id: req.query.q,
+      avatar: `https://${serverDomain}/images/avi.png`,
+      url: `https://${req.query.q}/${req.query.q}`,
+      fields: [],
+    }],
+    hashtags: [],
+    statuses: [],
+  });
 });
 
 app.get('/main/:pagetype', (req, res) => {
