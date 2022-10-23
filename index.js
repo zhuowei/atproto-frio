@@ -21,10 +21,74 @@ function xrpcGet(endpoint, accessToken = '') {
     headers: {'authorization': accessToken},
   });
 }
-
+const staticPath = 'static';
 app.use(express.static('static'));
 app.use(express.json());
 app.use(upload.none());
+
+function translateAtprotoAuthorToMastodon(atprotoAuthor) {
+  return {
+    acct: atprotoAuthor.name,
+    display_name: atprotoAuthor.displayName,
+    username: atprotoAuthor.name,
+    id: atprotoAuthor.did,
+    avatar: 'http://localhost/avatar.png',
+    url: 'http://localhost/didLookup?user=' +
+        encodeURIComponent(atprotoAuthor.did),
+    fields: [],
+  };
+}
+
+function translateAtprotoPostToMastodon(atprotoPost) {
+  return {
+    id: atprotoPost.uri,
+        account: translateAtprotoAuthorToMastodon(atprotoPost.author),
+        content: atprotoPost.record.text, spoiler_text: '', tags: [], pleroma: {
+          emoji_reactions: [],
+        },
+        created_at: atprotoPost.record.createdAt, atproto: atprotoPost,
+  }
+}
+
+function translateAtprotoTimelineToMastodon(atprotoTimeline) {
+  return atprotoTimeline.map(translateAtprotoPostToMastodon);
+}
+
+// there's got to be a better way
+async function translateMaxIdToBefore(maxId, authorization) {
+  if (!maxId) {
+    return '';
+  }
+  const xrpcRes = await xrpcGet(
+      `app.bsky.getPostThread?uri=${encodeURIComponent(maxId)}&depth=1`,
+      authorization);
+  const xrpcJson = await xrpcRes.json();
+  if (xrpcRes.status !== 200) {
+    console.log('translate maxid fail', xrpcJson);
+    return '';
+  }
+  // console.log(xrpcJson);
+  return encodeURIComponent(xrpcJson.thread.indexedAt);
+}
+
+async function makeTimelineUrl(endpoint, limit, maxId, authorization) {
+  let ret = `${endpoint}?limit=${encodeURIComponent(limit || '')}`;
+  if (maxId) {
+    ret += `&before=${await translateMaxIdToBefore(maxId, authorization)}`;
+  }
+  return ret;
+}
+
+app.get('/api/v1/timelines/home', async (req, res) => {
+  const xrpcRes = await xrpcGet(
+      await makeTimelineUrl(
+          'app.bsky.getHomeFeed', req.query.limit, req.query.max_id,
+          req.headers.authorization),
+      req.headers.authorization);
+  const xrpcJson = await xrpcRes.json();
+  // console.log(xrpcJson);
+  res.status(200).json(translateAtprotoTimelineToMastodon(xrpcJson.feed));
+});
 
 app.post('/api/v1/statuses', (req, res) => {
   console.log(req.body);
@@ -33,7 +97,7 @@ app.post('/api/v1/statuses', (req, res) => {
 
 app.get('/api/pleroma/frontend_configurations', (req, res) => {
   res.status(200).json({
-    pleroma_fe: {},
+    pleroma_fe: {disableChat: true},
   });
 });
 
@@ -107,6 +171,14 @@ app.post('/api/v1/accounts', async (req, res) => {
   const xrpcJson = await xrpcRes.json();
   console.log(xrpcJson);
   res.status(xrpcRes.status).json({upstream_error: xrpcJson});
+});
+
+app.get('/api/v1/notifications', (req, res) => {
+  res.status(200).json([]);
+});
+
+app.get('/main/:pagetype', (req, res) => {
+  res.sendFile('index.html', {root: staticPath});
 });
 
 const port = process.env.PORT || 3000;
