@@ -1,4 +1,5 @@
 const express = require('express');
+const bodyParser = require('body-parser');
 const multer = require('multer');
 
 const upload = multer({});
@@ -21,6 +22,22 @@ function xrpcGet(endpoint, accessToken = '') {
     headers: {'authorization': accessToken},
   });
 }
+
+async function xrpcProxy(req, res, next) {
+  const headers = {};
+  for (const i of ["content-type", "authorization"]) {
+    if (req.headers[i]) {
+      headers[i] = req.headers[i];
+    }
+  }
+  const xrpcResponse = await fetch(xrpcServer + req.url.substring(1), {method: req.method, headers: headers, body: req.body});
+  const body = await xrpcResponse.arrayBuffer();
+  res.status(xrpcResponse.status).set('content-type', xrpcResponse.headers.get('content-type')).send(Buffer.from(body));
+}
+
+app.use('/xrpc/', bodyParser.raw());
+app.use('/xrpc/', xrpcProxy);
+
 const staticPath = 'static';
 app.use(express.static('static'));
 app.use(express.json());
@@ -85,6 +102,17 @@ async function makeTimelineUrl(endpoint, limit, maxId, authorization) {
   }
   return ret;
 }
+
+app.get('/api/v1/timelines/home', async (req, res) => {
+  const xrpcRes = await xrpcGet(
+      await makeTimelineUrl(
+          'app.bsky.getHomeFeed', req.query.limit, req.query.max_id,
+          req.headers.authorization),
+      req.headers.authorization);
+  const xrpcJson = await xrpcRes.json();
+  // console.log(xrpcJson);
+  res.status(200).json(translateAtprotoTimelineToMastodon(xrpcJson.feed));
+});
 
 app.get('/api/v1/timelines/home', async (req, res) => {
   const xrpcRes = await xrpcGet(
@@ -210,6 +238,14 @@ app.get('/api/v1/notifications', (req, res) => {
 });
 
 app.get('/main/:pagetype', (req, res) => {
+  res.sendFile('index.html', {root: staticPath});
+});
+
+app.get('/login', (req, res) => {
+  res.sendFile('index.html', {root: staticPath});
+});
+
+app.get('/:username', (req, res) => {
   res.sendFile('index.html', {root: staticPath});
 });
 
