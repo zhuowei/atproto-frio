@@ -25,14 +25,18 @@ function xrpcGet(endpoint, accessToken = '') {
 
 async function xrpcProxy(req, res, next) {
   const headers = {};
-  for (const i of ["content-type", "authorization"]) {
+  for (const i of ['content-type', 'authorization']) {
     if (req.headers[i]) {
       headers[i] = req.headers[i];
     }
   }
-  const xrpcResponse = await fetch(xrpcServer + req.url.substring(1), {method: req.method, headers: headers, body: req.body});
+  const xrpcResponse = await fetch(
+      xrpcServer + req.url.substring(1),
+      {method: req.method, headers: headers, body: req.body});
   const body = await xrpcResponse.arrayBuffer();
-  res.status(xrpcResponse.status).set('content-type', xrpcResponse.headers.get('content-type')).send(Buffer.from(body));
+  res.status(xrpcResponse.status)
+      .set('content-type', xrpcResponse.headers.get('content-type'))
+      .send(Buffer.from(body));
 }
 
 app.use('/xrpc/', bodyParser.raw());
@@ -95,10 +99,13 @@ async function translateMaxIdToBefore(maxId, authorization) {
   return encodeURIComponent(post.indexedAt);
 }
 
-async function makeTimelineUrl(endpoint, limit, maxId, authorization) {
+async function makeTimelineUrl(endpoint, limit, maxId, authorization, author) {
   let ret = `${endpoint}?limit=${encodeURIComponent(limit || '')}`;
   if (maxId) {
     ret += `&before=${await translateMaxIdToBefore(maxId, authorization)}`;
+  }
+  if (author) {
+    ret += `&author=${encodeURIComponent(author)}`;
   }
   return ret;
 }
@@ -114,11 +121,11 @@ app.get('/api/v1/timelines/home', async (req, res) => {
   res.status(200).json(translateAtprotoTimelineToMastodon(xrpcJson.feed));
 });
 
-app.get('/api/v1/timelines/home', async (req, res) => {
+app.get('/api/v1/accounts/:accountId/statuses', async (req, res) => {
   const xrpcRes = await xrpcGet(
       await makeTimelineUrl(
-          'app.bsky.getHomeFeed', req.query.limit, req.query.max_id,
-          req.headers.authorization),
+          'app.bsky.getAuthorFeed', req.query.limit, req.query.max_id,
+          req.headers.authorization, req.params.accountId),
       req.headers.authorization);
   const xrpcJson = await xrpcRes.json();
   // console.log(xrpcJson);
@@ -168,6 +175,14 @@ app.get('/api/v1/accounts/verify_credentials', async (req, res) => {
   res.status(xrpcRes.status).json({
     upstream_error: xrpcJson,
   });
+});
+
+app.get('/api/v1/accounts/:accountId', async (req, res) => {
+  const xrpcRes = await xrpcGet(
+      `app.bsky.getProfile?user=${encodeURIComponent(req.params.accountId)}`,
+      req.headers.authorization);
+  const xrpcJson = await xrpcRes.json();
+  res.status(xrpcRes.status).json(translateAtprotoAuthorToMastodon(xrpcJson));
 });
 
 app.post('/api/v1/apps', (req, res) => {
