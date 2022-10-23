@@ -54,21 +54,28 @@ function translateAtprotoTimelineToMastodon(atprotoTimeline) {
   return atprotoTimeline.map(translateAtprotoPostToMastodon);
 }
 
+async function fetchPostByUri(postUri, authorization) {
+  const xrpcRes = await xrpcGet(
+      `app.bsky.getPostThread?uri=${encodeURIComponent(postUri)}&depth=1`,
+      authorization);
+  const xrpcJson = await xrpcRes.json();
+  if (xrpcRes.status !== 200) {
+    console.log('fetchPost fail', xrpcJson);
+    return null;
+  }
+  return xrpcJson.thread;
+}
+
 // there's got to be a better way
 async function translateMaxIdToBefore(maxId, authorization) {
   if (!maxId) {
     return '';
   }
-  const xrpcRes = await xrpcGet(
-      `app.bsky.getPostThread?uri=${encodeURIComponent(maxId)}&depth=1`,
-      authorization);
-  const xrpcJson = await xrpcRes.json();
-  if (xrpcRes.status !== 200) {
-    console.log('translate maxid fail', xrpcJson);
+  const post = await fetchPostByUri(maxId, authorization);
+  if (!post) {
     return '';
   }
-  // console.log(xrpcJson);
-  return encodeURIComponent(xrpcJson.thread.indexedAt);
+  return encodeURIComponent(post.indexedAt);
 }
 
 async function makeTimelineUrl(endpoint, limit, maxId, authorization) {
@@ -90,9 +97,34 @@ app.get('/api/v1/timelines/home', async (req, res) => {
   res.status(200).json(translateAtprotoTimelineToMastodon(xrpcJson.feed));
 });
 
-app.post('/api/v1/statuses', (req, res) => {
-  console.log(req.body);
-  res.status(400).json({});
+// This is not secure since the JWT isn't validated
+function getDidFromAuthorizationInsecure(authorization) {
+  // yolo
+  const parts = authorization.split(' ');
+  if (parts[0] !== 'Bearer') {
+    throw new Error('not bearer');
+  }
+  return JSON.parse(atob(parts[1].split('.')[1])).sub;
+}
+
+app.post('/api/v1/statuses', async (req, res) => {
+  const xrpcReq = {
+    $type: 'app.bsky.post',
+    text: req.body.status,
+    createdAt: new Date().toISOString()
+  };
+  const xrpcRes = await xrpcPost(
+      `com.atproto.repoCreateRecord?collection=app.bsky.post&did=${
+          encodeURIComponent(
+              getDidFromAuthorizationInsecure(req.headers.authorization))}`,
+      xrpcReq, req.headers.authorization);
+  const xrpcJson = await xrpcRes.json();
+  if (xrpcRes.status !== 200) {
+    res.status(xrpcRes.status).json({error: xrpcJson.message});
+    return;
+  }
+  const post = await fetchPostByUri(xrpcJson.uri, req.headers.authorization);
+  res.status(200).json(translateAtprotoPostToMastodon(post));
 });
 
 app.get('/api/pleroma/frontend_configurations', (req, res) => {
