@@ -13,6 +13,9 @@ const hardcodedInviteCode = process.env.HARDCODED_INVITE_CODE;
 const xrpcServer = 'http://localhost:2583/xrpc/';
 
 function xrpcPost(endpoint, request, accessToken = '') {
+  if (accessToken === "Bearer TODO-anonymous-access-token") {
+    accessToken = '';
+  }
   return fetch(xrpcServer + endpoint, {
     method: 'POST',
     headers: {'content-type': 'application/json', 'authorization': accessToken},
@@ -21,6 +24,9 @@ function xrpcPost(endpoint, request, accessToken = '') {
 }
 
 function xrpcGet(endpoint, accessToken = '') {
+  if (accessToken === "Bearer TODO-anonymous-access-token") {
+    accessToken = '';
+  }
   return fetch(xrpcServer + endpoint, {
     method: 'GET',
     headers: {'authorization': accessToken},
@@ -57,9 +63,8 @@ function translateAtprotoAuthorToMastodon(atprotoAuthor) {
     display_name: atprotoAuthor.displayName,
     username: atprotoAuthor.name,
     id: atprotoAuthor.did,
-    avatar: 'http://localhost/avatar.png',
-    url: 'http://localhost/didLookup?user=' +
-        encodeURIComponent(atprotoAuthor.did),
+    avatar: `https://${serverDomain}/images/avi.png`,
+    url: `https://${serverDomain}/${atprotoAuthor.name}`,
     fields: [],
   };
 }
@@ -181,6 +186,31 @@ app.get('/api/v1/accounts/verify_credentials', async (req, res) => {
   });
 });
 
+async function usernameToDidRemote(username) {
+  if (username.startsWith("did:")) {
+    return username;
+  }
+  const remoteXrpc = username.endsWith(".test")? xrpcServer: `https://${username}/xrpc/`;
+  const xrpcRes = await fetch(`${remoteXrpc}com.atproto.resolveName?name=${encodeURIComponent(username)}`);
+  const xrpcJson = await xrpcRes.json();
+  return xrpcJson.did;
+}
+
+app.post('/api/v1/accounts/:accountId/follow', async (req, res) => {
+  // Resolve the DID
+  const targetUsername = req.params.accountId;
+  const targetDid = await usernameToDidRemote(targetUsername);
+  const xrpcReq = {$type: 'app.bsky.follow', subject: targetDid, createdAt: new Date().toISOString()};
+  const xrpcRes = await xrpcPost(
+      `com.atproto.repoCreateRecord?collection=app.bsky.follow&did=${
+          encodeURIComponent(
+              getDidFromAuthorizationInsecure(req.headers.authorization))}`,
+      xrpcReq, req.headers.authorization);
+  const xrpcJson = await xrpcRes.json();
+  console.log(xrpcJson);
+  res.status(xrpcRes.status).json({id: targetDid});
+});
+
 app.get('/api/v1/accounts/:accountId', async (req, res) => {
   const xrpcRes = await xrpcGet(
       `app.bsky.getProfile?user=${encodeURIComponent(req.params.accountId)}`,
@@ -276,6 +306,21 @@ app.get('/api/pleroma/captcha', (req, res) => {
 
 app.get('/api/v1/notifications', (req, res) => {
   res.status(200).json([]);
+});
+
+app.get('/api/v2/search', (req, res) => {
+  // TODO(zhuowei): actually point this upstream to search
+  res.status(200).json({accounts: [{
+    acct: req.query.q,
+    display_name: req.query.q,
+    username: req.query.q,
+    id: req.query.q,
+    avatar: `https://${serverDomain}/images/avi.png`,
+    url: `https://${req.query.q}/${req.query.q}`,
+    fields: [],
+  }],
+hashtags: [],
+statuses: [],});
 });
 
 app.get('/main/:pagetype', (req, res) => {
