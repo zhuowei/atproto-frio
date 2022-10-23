@@ -6,6 +6,10 @@ const upload = multer({});
 
 const app = express();
 
+const singleUserMode = true;
+const serverDomain = process.env.PROJECT_DOMAIN ||
+    'please-set-project-domain-read-docs.localhost';
+const hardcodedInviteCode = process.env.HARDCODED_INVITE_CODE;
 const xrpcServer = 'http://localhost:2583/xrpc/';
 
 function xrpcPost(endpoint, request, accessToken = '') {
@@ -237,15 +241,37 @@ app.post('/oauth/revoke', async (req, res) => {
 });
 
 app.post('/api/v1/accounts', async (req, res) => {
+  if (singleUserMode) {
+    if (req.body.username !== serverDomain) {
+      res.status(400).json({
+        error: JSON.stringify(
+            {ap_id: [`must be exactly "${serverDomain}" in single user mode`]}),
+      });
+      return;
+    }
+  }
   const xrpcReq = {
     username: req.body.username,
     email: req.body.email,
     password: req.body.password
   };
+  if (hardcodedInviteCode) {
+    xrpcReq.inviteCode = hardcodedInviteCode;
+  }
   const xrpcRes = await xrpcPost('com.atproto.createAccount', xrpcReq);
   const xrpcJson = await xrpcRes.json();
   console.log(xrpcJson);
-  res.status(xrpcRes.status).json({upstream_error: xrpcJson});
+  res.status(xrpcRes.status).json({
+    access_token: xrpcJson.jwt,
+    token_type: 'Bearer',
+    scope: 'read write follow push admin',
+    created_at: 0,
+    upstream_error: xrpcJson
+  });
+});
+
+app.get('/api/pleroma/captcha', (req, res) => {
+  res.status(200).json({});
 });
 
 app.get('/api/v1/notifications', (req, res) => {
@@ -253,10 +279,6 @@ app.get('/api/v1/notifications', (req, res) => {
 });
 
 app.get('/main/:pagetype', (req, res) => {
-  res.sendFile('index.html', {root: staticPath});
-});
-
-app.get('/login', (req, res) => {
   res.sendFile('index.html', {root: staticPath});
 });
 
