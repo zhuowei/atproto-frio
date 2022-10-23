@@ -55,11 +55,21 @@ async function xrpcProxy(req, res, next) {
 app.use('/xrpc/', bodyParser.raw());
 app.use('/xrpc/', xrpcProxy);
 
+function didWebUrl(userDid) {
+  const parts = userDid.split(':');
+  return 'https://' + parts[2] + '/' +
+      (userDid.length > 3 ? userDid.slice(3).join('/') : '.well-known') +
+      '/did.json';
+}
+
 async function lookupPdcFromDid(userDid) {
   console.log('lookupPdcFromDid', userDid);
   if (userDid === 'did:test:hello') {
     return 'http://localhost:3333/xrpc/';
   }
+  const didUrl = userDid.startsWith('did:web:') ?
+      didWebUrl(userDid) :
+      plcServer + encodeURIComponent(userDid);
   const plcResp = await fetch(plcServer + encodeURIComponent(userDid));
   const plcJson = await plcResp.json();
   return plcJson.service[0].serviceEndpoint + '/xrpc/';
