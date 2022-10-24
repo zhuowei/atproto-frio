@@ -203,12 +203,17 @@ function translateAtprotoAuthorToMastodon(atprotoAuthor) {
 function translateAtprotoPostToMastodon(atprotoPost) {
   return {
     id: atprotoPost.uri,
-        account: translateAtprotoAuthorToMastodon(atprotoPost.author),
-        content: atprotoPost.record.text, spoiler_text: '', tags: [], pleroma: {
-          emoji_reactions: [],
-        },
-        created_at: atprotoPost.record.createdAt, atproto: atprotoPost,
-  }
+    account: translateAtprotoAuthorToMastodon(atprotoPost.author),
+    content: atprotoPost.record.text,
+    spoiler_text: '',
+    tags: [],
+    emojis: [],
+    pleroma: {
+      emoji_reactions: [],
+    },
+    created_at: atprotoPost.record.createdAt,
+    atproto: atprotoPost,
+  };
 }
 
 function translateAtprotoTimelineToMastodon(atprotoTimeline) {
