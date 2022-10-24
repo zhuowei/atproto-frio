@@ -304,6 +304,7 @@ app.post('/api/v1/statuses', async (req, res) => {
     return;
   }
   const post = await fetchPostByUri(xrpcJson.uri, req.headers.authorization);
+  noAwait(doPushUserToFollowers(req.headers.authorization));
   res.status(200).json(translateAtprotoPostToMastodon(post));
 });
 
