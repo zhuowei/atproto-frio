@@ -1,3 +1,4 @@
+const {fetch} = require('undici');
 const express = require('express');
 const bodyParser = require('body-parser');
 const multer = require('multer');
@@ -7,10 +8,10 @@ const upload = multer({});
 const app = express();
 
 const singleUserMode = true;
-const serverDomain = process.env.PROJECT_DOMAIN ||
-    'please-set-project-domain-read-docs.localhost';
+const serverDomain =
+    process.env.HOSTNAME || 'please-set-hostname-read-docs.localhost';
 const hardcodedInviteCode = process.env.HARDCODED_INVITE_CODE;
-const plcServer = process.env.PLC_SERVER || 'http://localhost:2582';
+const plcServer = process.env.DID_PLC_URL || 'http://localhost:2582';
 const xrpcServer = 'http://localhost:2583/xrpc/';
 
 function noAwait(promise) {}
@@ -346,10 +347,9 @@ app.post('/api/v1/accounts/:accountId/follow', async (req, res) => {
   const xrpcJson = await xrpcRes.json();
   console.log(xrpcJson);
   noAwait(doPushUserToFollowers(req.headers.authorization, [targetDid]));
-  // TODO(zhuowei): do another lookup for PDC
-  // fetches the user's post from the remote server
+  const targetPdc = await lookupPdcFromDid(targetDid);
   noAwait(
-      pushUserToRemotePdc(targetDid, 'https://${username}/xrpc/', xrpcServer));
+      pushUserToRemotePdc(targetDid, `https://${targetPdc}/xrpc/`, xrpcServer));
   res.status(xrpcRes.status).json({id: targetDid});
 });
 
