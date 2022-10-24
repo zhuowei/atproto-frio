@@ -90,16 +90,19 @@ async function getUserFollowers(usernameOrDid, authorization) {
   return xrpcJson;
 }
 
-async function pushUserToRemotePdc(userDid, remotePdc, authorization) {
+async function pushUserToRemotePdc(userDid, localPdc, remotePdc) {
   const remoteRootResp = await fetch(
       `${remotePdc}com.atproto.syncGetRoot?did=${encodeURIComponent(userDid)}`);
+  console.log(
+      'remoteRootResp',
+      `${remotePdc}com.atproto.syncGetRoot?did=${encodeURIComponent(userDid)}`,
+      'returned', remoteRootResp.status);
   const remoteRootJson =
       remoteRootResp.status === 200 ? await remoteRootResp.json() : {};
   console.log('remoteRootJson', remoteRootJson);
-  const diffToRootResp = await xrpcGet(
-      `com.atproto.syncGetRepo?did=${encodeURIComponent(userDid)}&from=${
-          encodeURIComponent(remoteRootJson.root || '')}`,
-      authorization)
+  const diffToRootResp = await fetch(`${localPdc}com.atproto.syncGetRepo?did=${
+      encodeURIComponent(
+          userDid)}&from=${encodeURIComponent(remoteRootJson.root || '')}`)
   const diffToRootData = await diffToRootResp.arrayBuffer();
   console.log('diffToRootData', diffToRootData);
   const remotePushResp = await fetch(
@@ -110,7 +113,8 @@ async function pushUserToRemotePdc(userDid, remotePdc, authorization) {
         headers: {'content-type': 'application/cbor'},
         body: diffToRootData
       });
-  console.log('pushing to', remotePdc, 'returns', remotePushResp.status);
+  console.log(
+      'pushing ', localPdc, 'to', remotePdc, 'returns', remotePushResp.status);
   return remotePushResp.status;
 }
 
@@ -148,7 +152,7 @@ async function doPushUserToFollowers(authorization, extraCcUsers = []) {
   const pushResults =
       (await Promise.all(pdcLookups.map(async a => {
         try {
-          return await pushUserToRemotePdc(currentUserDid, a, authorization);
+          return await pushUserToRemotePdc(currentUserDid, xrpcServer, a);
         } catch (e) {
           console.log(e);
           return null;
@@ -162,9 +166,24 @@ app.use(express.static('static'));
 app.use(express.json());
 app.use(upload.none());
 
+const forceSyncAllowed = process.env.FORCE_SYNC_ALLOWED ? true : false;
+
 app.get('/force-sync', async (req, res) => {
+  if (!forceSyncAllowed) {
+    res.status(400).send({});
+    return;
+  }
   await doPushUserToFollowers(
       req.headers.authorization, req.query.cc ? req.query.cc.split(',') : []);
+  res.status(200).send({});
+});
+
+app.get('/force-fetch', async (req, res) => {
+  if (!forceSyncAllowed) {
+    res.status(400).send({});
+    return;
+  }
+  await pushUserToRemotePdc(req.query.from, req.query.remoteServer, xrpcServer);
   res.status(200).send({});
 });
 
@@ -327,6 +346,10 @@ app.post('/api/v1/accounts/:accountId/follow', async (req, res) => {
   const xrpcJson = await xrpcRes.json();
   console.log(xrpcJson);
   noAwait(doPushUserToFollowers(req.headers.authorization, [targetDid]));
+  // TODO(zhuowei): do another lookup for PDC
+  // fetches the user's post from the remote server
+  noAwait(
+      pushUserToRemotePdc(targetDid, 'https://${username}/xrpc/', xrpcServer));
   res.status(xrpcRes.status).json({id: targetDid});
 });
 
