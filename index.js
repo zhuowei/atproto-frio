@@ -92,6 +92,7 @@ async function getUserFollowers(usernameOrDid, authorization) {
 }
 
 async function pushUserToRemotePdc(userDid, localPdc, remotePdc) {
+  console.log('pushUserToRemotePdc', userDid, localPdc, remotePdc);
   const remoteRootResp = await fetch(
       `${remotePdc}com.atproto.syncGetRoot?did=${encodeURIComponent(userDid)}`);
   console.log(
@@ -354,8 +355,7 @@ app.post('/api/v1/accounts/:accountId/follow', async (req, res) => {
   console.log(xrpcJson);
   noAwait(doPushUserToFollowers(req.headers.authorization, [targetDid]));
   const targetPdc = await lookupPdcFromDid(targetDid);
-  noAwait(
-      pushUserToRemotePdc(targetDid, `https://${targetPdc}/xrpc/`, xrpcServer));
+  noAwait(pushUserToRemotePdc(targetDid, targetPdc, xrpcServer));
   res.status(xrpcRes.status).json({id: targetDid});
 });
 
