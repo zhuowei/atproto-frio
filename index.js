@@ -467,6 +467,10 @@ app.get('/api/v2/search', (req, res) => {
   });
 });
 
+app.get('/api/pleroma/emoji.json', (req, res) => {
+  res.status(200).json({});
+});
+
 app.get('/main/:pagetype', (req, res) => {
   res.sendFile('index.html', {root: staticPath});
 });
